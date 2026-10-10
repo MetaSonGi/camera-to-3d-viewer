@@ -35,41 +35,106 @@ const cameraPreview = document.getElementById('cameraPreview');
 const cameraError = document.getElementById('cameraError');
 const captureBtn = document.getElementById('captureBtn');
 const cameraCloseBtn = document.getElementById('cameraCloseBtn');
+const cameraSwitchBtn = document.getElementById('cameraSwitchBtn');
 let cameraStream = null;
+let facingMode = 'environment'; // 'environment' | 'user'
 
 cameraBtn.addEventListener('click', openCamera);
 cameraCloseBtn.addEventListener('click', closeCamera);
 captureBtn.addEventListener('click', capturePhoto);
+cameraSwitchBtn.addEventListener('click', switchCamera);
 cameraModal.addEventListener('click', (e) => {
   if (e.target === cameraModal) closeCamera();
 });
 
+/** 제약 조건 체인: 후면(정확) → 후면(선호) → 아무 카메라 (PC 웹캠 대응) */
+function cameraConstraints() {
+  return [
+    { video: { facingMode: { exact: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 } }, audio: false },
+    { video: true, audio: false },
+  ];
+}
+
 async function openCamera() {
   cameraError.classList.add('hidden');
   cameraModal.classList.remove('hidden');
+  stopCameraTracks();
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showCameraError('이 브라우저에서는 카메라를 사용할 수 없습니다.');
+  if (!window.isSecureContext) {
+    showCameraError('카메라는 HTTPS(또는 localhost)에서만 동작합니다. https:// 주소로 접속해주세요.');
     return;
   }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showCameraError('이 브라우저에서는 카메라를 사용할 수 없습니다. 최신 Chrome / Safari / Edge를 이용해주세요.');
+    return;
+  }
+
+  let lastErr = null;
+  for (const constraints of cameraConstraints()) {
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      cameraStream = null;
+    }
+  }
+  if (!cameraStream) {
+    showCameraErrorFor(lastErr);
+    return;
+  }
+
+  cameraPreview.srcObject = cameraStream;
+  // iOS Safari 대응
+  cameraPreview.setAttribute('playsinline', '');
+  cameraPreview.muted = true;
   try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
-    cameraPreview.srcObject = cameraStream;
     await cameraPreview.play();
   } catch (err) {
-    console.error(err);
-    if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-      showCameraError('카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라 접근을 허용해주세요.');
-    } else if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') {
-      showCameraError('사용 가능한 카메라를 찾을 수 없습니다.');
-    } else if (err.name === 'NotReadableError') {
-      showCameraError('카메라가 다른 앱에서 사용 중입니다.');
-    } else {
-      showCameraError('카메라를 시작할 수 없습니다. (HTTPS 또는 localhost에서만 동작합니다)');
-    }
+    console.warn('video play:', err);
+  }
+  updateSwitchLabel();
+}
+
+/** 전면/후면 카메라 전환 */
+async function switchCamera() {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await openCamera();
+}
+
+function updateSwitchLabel() {
+  if (!cameraSwitchBtn) return;
+  cameraSwitchBtn.textContent =
+    facingMode === 'environment' ? '🔄 전면 카메라로 전환' : '🔄 후면 카메라로 전환';
+}
+
+function stopCameraTracks() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach((t) => t.stop());
+    cameraStream = null;
+  }
+  cameraPreview.srcObject = null;
+}
+
+function showCameraErrorFor(err) {
+  console.error(err);
+  const name = err && err.name;
+  if (name === 'NotAllowedError') {
+    showCameraError('카메라 권한이 차단됐어요. 📌 주소창 왼쪽 자물쇠(또는 ⓘ) → 사이트 설정 → 카메라를 "허용"으로 바꿔주세요. (iPhone: 설정 > Safari > 카메라 허용도 확인)');
+  } else if (name === 'NotFoundError') {
+    showCameraError('카메라를 찾을 수 없어요. PC에서는 웹캠이 연결되어 있는지, 노트북은 카메라 셔터·Fn키 상태를 확인해주세요.');
+  } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+    showCameraError('카메라가 다른 앱(Zoom·Teams 등)에서 사용 중이에요. 다른 앱을 끄고 다시 시도해주세요.');
+  } else if (name === 'OverconstrainedError') {
+    showCameraError('요청한 카메라 모드를 지원하지 않아요. 전면/후면 전환 버튼을 눌러보세요.');
+  } else if (name === 'SecurityError') {
+    showCameraError('보안 정책상 카메라를 사용할 수 없어요. HTTPS 주소로 접속했는지 확인해주세요.');
+  } else if (name === 'AbortError') {
+    showCameraError('카메라 시작이 중단됐어요. 다시 시도해주세요.');
+  } else {
+    showCameraError('카메라를 시작할 수 없어요. 브라우저를 최신 버전으로 업데이트한 뒤 다시 시도해주세요.');
   }
 }
 
