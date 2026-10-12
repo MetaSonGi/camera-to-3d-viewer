@@ -1,4 +1,13 @@
-# 📷 이미지 → 3D 뷰어 (Image to 3D Viewer)
+# 📷 카메라 → 3D 뷰어 | Camera to 3D Viewer
+
+> 카메라로 찍으면 즉시 3D 모델로 변환  
+> Shoot with your camera, get a 3D model instantly
+
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen?style=flat-square)](https://metasongi.github.io/camera-to-3d-viewer/) ![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=flat-square) ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square) ![Three.js](https://img.shields.io/badge/Three.js-000000?style=flat-square)
+
+🌐 **Live:** https://metasongi.github.io/camera-to-3d-viewer/
+
+---
 
 2D 이미지를 업로드하면 **깊이 맵(Depth Map)** 을 생성하고, **Three.js**로 입체적인 3D 뷰를 만들어주는 웹 앱입니다.
 100% 클라이언트 사이드 동작 — 이미지가 서버로 전송되지 않습니다.
