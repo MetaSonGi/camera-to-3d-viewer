@@ -38,6 +38,7 @@ const cameraCloseBtn = document.getElementById('cameraCloseBtn');
 const cameraSwitchBtn = document.getElementById('cameraSwitchBtn');
 let cameraStream = null;
 let facingMode = 'environment'; // 'environment' | 'user'
+let cameraSession = 0; // openCamera 호출마다 증가 — 닫은 뒤 늦게 도착한 스트림이 카메라를 다시 켜는 것 방지
 
 cameraBtn.addEventListener('click', openCamera);
 cameraCloseBtn.addEventListener('click', closeCamera);
@@ -57,8 +58,10 @@ function cameraConstraints() {
 }
 
 async function openCamera() {
+  const session = ++cameraSession; // 이번 열기 시도 고유 번호
   cameraError.classList.add('hidden');
   cameraModal.classList.remove('hidden');
+  captureBtn.disabled = true; // 스트림 준비 전 촬영 방지
   stopCameraTracks();
 
   if (!window.isSecureContext) {
@@ -72,6 +75,7 @@ async function openCamera() {
 
   let lastErr = null;
   for (const constraints of cameraConstraints()) {
+    if (session !== cameraSession) return; // 닫혔으면 중단
     try {
       cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
       lastErr = null;
@@ -80,6 +84,11 @@ async function openCamera() {
       lastErr = err;
       cameraStream = null;
     }
+  }
+  if (session !== cameraSession) {
+    // 닫은 뒤 늦게 도착한 스트림이면 즉시 정리 (카메라 LED가 다시 켜지는 것 방지)
+    stopCameraTracks();
+    return;
   }
   if (!cameraStream) {
     showCameraErrorFor(lastErr);
@@ -95,6 +104,12 @@ async function openCamera() {
   } catch (err) {
     console.warn('video play:', err);
   }
+  if (session !== cameraSession) {
+    // play 대기 중 닫혔으면 정리
+    stopCameraTracks();
+    return;
+  }
+  captureBtn.disabled = false; // 이제 촬영 가능
   updateSwitchLabel();
 }
 
@@ -139,7 +154,10 @@ function showCameraErrorFor(err) {
 }
 
 function capturePhoto() {
-  if (!cameraStream) return;
+  if (!cameraStream) {
+    showCameraError('카메라가 아직 켜지지 않았습니다. 잠시 후 다시 촬영을 눌러주세요.');
+    return;
+  }
   const vw = cameraPreview.videoWidth;
   const vh = cameraPreview.videoHeight;
   if (!vw || !vh) {
@@ -155,11 +173,13 @@ function capturePhoto() {
 }
 
 function closeCamera() {
+  cameraSession++; // 진행 중이거나 대기 중인 openCamera 무효화
   if (cameraStream) {
     cameraStream.getTracks().forEach((t) => t.stop());
     cameraStream = null;
   }
   cameraPreview.srcObject = null;
+  captureBtn.disabled = true;
   cameraModal.classList.add('hidden');
 }
 
