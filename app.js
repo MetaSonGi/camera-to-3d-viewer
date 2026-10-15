@@ -27,6 +27,16 @@ const autoRotateInput = document.getElementById('autoRotate');
 const wireframeInput = document.getElementById('wireframe');
 const newImageBtn = document.getElementById('newImageBtn');
 const tabs = document.querySelectorAll('.tab');
+const uploadError = document.getElementById('uploadError');
+
+function showUploadError(msg) {
+  if (!uploadError) { alert(msg); return; }
+  uploadError.textContent = msg;
+  uploadError.classList.remove('hidden');
+}
+function clearUploadError() {
+  if (uploadError) uploadError.classList.add('hidden');
+}
 
 // ---------- 카메라 ----------
 const cameraBtn = document.getElementById('cameraBtn');
@@ -57,6 +67,20 @@ function cameraConstraints() {
   ];
 }
 
+/** getUserMedia에 타임아웃 부여 — 멈추면 다음 제약 조건으로 넘어간다 */
+function getUserMediaWithTimeout(constraints, ms) {
+  return Promise.race([
+    navigator.mediaDevices.getUserMedia(constraints),
+    new Promise((_, reject) =>
+      setTimeout(() => {
+        const e = new Error('timeout');
+        e.name = 'TimeoutError';
+        reject(e);
+      }, ms)
+    ),
+  ]);
+}
+
 async function openCamera() {
   const session = ++cameraSession; // 이번 열기 시도 고유 번호
   cameraError.classList.add('hidden');
@@ -77,7 +101,7 @@ async function openCamera() {
   for (const constraints of cameraConstraints()) {
     if (session !== cameraSession) return; // 닫혔으면 중단
     try {
-      cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+      cameraStream = await getUserMediaWithTimeout(constraints, 12000);
       lastErr = null;
       break;
     } catch (err) {
@@ -148,6 +172,8 @@ function showCameraErrorFor(err) {
     showCameraError('보안 정책상 카메라를 사용할 수 없어요. HTTPS 주소로 접속했는지 확인해주세요.');
   } else if (name === 'AbortError') {
     showCameraError('카메라 시작이 중단됐어요. 다시 시도해주세요.');
+  } else if (name === 'TimeoutError') {
+    showCameraError('카메라 시작이 너무 오래 걸려요. 다른 앱에서 카메라를 쓰고 있는지 확인하고 다시 시도해주세요.');
   } else {
     showCameraError('카메라를 시작할 수 없어요. 브라우저를 최신 버전으로 업데이트한 뒤 다시 시도해주세요.');
   }
@@ -271,18 +297,40 @@ function makeSamplePattern() {
   return c;
 }
 
+/**
+ * 메모리 안전 이미지 로드:
+ * 예전에는 원본 해상도 그대로 캔버스를 만들어서(폰 사진 1200만 화소 등)
+ * 모바일에서 멈추거나 죽었다. 이제 Image + ObjectURL로 디코딩한 뒤
+ * 512px로 바로 축소 그리기 — 큰 캔버스를 절대 만들지 않는다.
+ */
 async function loadImageFromBlob(blob) {
+  clearUploadError();
+  const url = URL.createObjectURL(blob);
   try {
-    const bitmap = await createImageBitmap(blob);
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('decode'));
+      im.src = url;
+    });
+    const nw = img.naturalWidth || img.width;
+    const nh = img.naturalHeight || img.height;
+    if (!nw || !nh) throw new Error('empty');
+    const scale = Math.min(1, MAX_SIZE / Math.max(nw, nh));
+    const w = Math.max(1, Math.round(nw * scale));
+    const h = Math.max(1, Math.round(nh * scale));
     const c = document.createElement('canvas');
-    c.width = bitmap.width;
-    c.height = bitmap.height;
-    c.getContext('2d').drawImage(bitmap, 0, 0);
-    bitmap.close();
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, w, h);
     processImage(c);
   } catch (err) {
     console.error(err);
-    alert('이미지를 불러오지 못했습니다.');
+    showUploadError('이미지를 불러오지 못했습니다. 다른 사진으로 다시 시도해주세요.');
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -389,31 +437,38 @@ function renderDepthCanvas(depth, w, h) {
  * ============================================================ */
 
 function processImage(sourceCanvas) {
-  const { canvas, width, height } = downscale(sourceCanvas);
+  try {
+    const { canvas, width, height } = downscale(sourceCanvas);
 
-  // 원본 표시
-  originalCanvas.width = width;
-  originalCanvas.height = height;
-  originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
+    // 원본 표시
+    originalCanvas.width = width;
+    originalCanvas.height = height;
+    originalCanvas.getContext('2d').drawImage(canvas, 0, 0);
 
-  // 깊이 맵
-  const imageData = canvas.getContext('2d').getImageData(0, 0, width, height);
-  const depth = computeDepthMap(imageData, width, height);
-  renderDepthCanvas(depth, width, height);
+    // 깊이 맵
+    const imageData = canvas.getContext('2d').getImageData(0, 0, width, height);
+    const depth = computeDepthMap(imageData, width, height);
+    renderDepthCanvas(depth, width, height);
 
-  // 3D 씬 구축
-  buildScene(canvas, depth, width, height);
+    // 3D 씬 구축
+    buildScene(canvas, depth, width, height);
 
-  // 화면 전환
-  uploadSection.classList.add('hidden');
-  resultSection.classList.remove('hidden');
-  switchTab('original');
+    // 화면 전환 — 바로 3D 뷰를 보여준다
+    uploadSection.classList.add('hidden');
+    resultSection.classList.remove('hidden');
+    switchTab('view3d');
+  } catch (err) {
+    console.error(err);
+    disposeScene();
+    showUploadError('3D 변환 중 오류가 발생했습니다. 다른 사진으로 다시 시도해주세요.');
+  }
 }
 
 function resetToUpload() {
   disposeScene();
   resultSection.classList.add('hidden');
   uploadSection.classList.remove('hidden');
+  clearUploadError();
 }
 
 /* ============================================================
@@ -632,3 +687,6 @@ autoRotateInput.addEventListener('change', () => {
 wireframeInput.addEventListener('change', () => {
   if (three) three.mesh.material.wireframe = wireframeInput.checked;
 });
+
+/* 모듈 정상 로드 표시 (index.html의 로드 실패 감지용) */
+window.__viewerBooted = true;
